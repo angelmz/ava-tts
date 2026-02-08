@@ -1,0 +1,141 @@
+#!/bin/bash
+# ava-speak - Convert text files to audio with Ava's voice (Edge TTS)
+#
+# Usage:
+#   ava-speak script.txt              # Creates script.mp3
+#   ava-speak script.md -o output.mp3 # Custom output name
+#   ava-speak script.txt --play       # Play after creating
+#   cat story.txt | ava-speak -       # Read from stdin
+#
+# Supports: .txt, .md files (strips markdown formatting)
+
+set -e
+
+# Colors
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+NC='\033[0m'
+
+# Defaults
+VOICE="en-US-AvaNeural"
+PLAY_AFTER=false
+OUTPUT=""
+INPUT=""
+
+# Parse args
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        -o|--output)
+            OUTPUT="$2"
+            shift 2
+            ;;
+        --play)
+            PLAY_AFTER=true
+            shift
+            ;;
+        -v|--voice)
+            VOICE="$2"
+            shift 2
+            ;;
+        -h|--help)
+            echo "ava-speak - Convert text to speech with Ava's voice"
+            echo ""
+            echo "Usage:"
+            echo "  ava-speak <file.txt|file.md>     Convert file to MP3"
+            echo "  ava-speak - < input.txt          Read from stdin"
+            echo ""
+            echo "Options:"
+            echo "  -o, --output FILE    Output filename (default: input.mp3)"
+            echo "  --play               Play audio after creating"
+            echo "  -v, --voice VOICE    Edge TTS voice (default: en-US-AvaNeural)"
+            echo "  -h, --help           Show this help"
+            echo ""
+            echo "Examples:"
+            echo "  ava-speak story.txt"
+            echo "  ava-speak script.md -o podcast.mp3 --play"
+            echo "  echo 'Hello world' | ava-speak - -o hello.mp3"
+            exit 0
+            ;;
+        -*)
+            echo -e "${RED}Unknown option: $1${NC}" >&2
+            exit 1
+            ;;
+        *)
+            INPUT="$1"
+            shift
+            ;;
+    esac
+done
+
+# Check input
+if [[ -z "$INPUT" ]]; then
+    echo -e "${RED}Error: No input file specified${NC}" >&2
+    echo "Usage: ava-speak <file.txt|file.md> [-o output.mp3] [--play]" >&2
+    exit 1
+fi
+
+# Read input
+if [[ "$INPUT" == "-" ]]; then
+    TEXT=$(cat)
+    [[ -z "$OUTPUT" ]] && OUTPUT="output.mp3"
+else
+    if [[ ! -f "$INPUT" ]]; then
+        echo -e "${RED}Error: File not found: $INPUT${NC}" >&2
+        exit 1
+    fi
+    TEXT=$(cat "$INPUT")
+    # Default output name: same as input but .mp3
+    if [[ -z "$OUTPUT" ]]; then
+        OUTPUT="${INPUT%.*}.mp3"
+    fi
+fi
+
+# Strip markdown if present (basic cleanup)
+# Remove headers, bold, italic, links, code blocks
+TEXT=$(echo "$TEXT" | sed 's/^#\+ //g' | sed 's/\*\*//g' | sed 's/\*//g' | sed 's/`//g' | sed 's/\[.*\](.*)/\1/g')
+
+# Check if edge-tts is available
+if ! command -v edge-tts &> /dev/null; then
+    # Try with python -m
+    if ! python3 -m edge_tts --help &> /dev/null 2>&1; then
+        echo -e "${RED}Error: edge-tts not found. Install with: pip install edge-tts${NC}" >&2
+        exit 1
+    fi
+    EDGE_TTS="python3 -m edge_tts"
+else
+    EDGE_TTS="edge-tts"
+fi
+
+# Generate audio
+echo -e "${YELLOW}Generating audio with ${VOICE}...${NC}"
+$EDGE_TTS --voice "$VOICE" --text "$TEXT" --write-media "$OUTPUT" 2>/dev/null
+
+if [[ -f "$OUTPUT" ]]; then
+    SIZE=$(ls -lh "$OUTPUT" | awk '{print $5}')
+    DURATION=$(ffprobe -v quiet -show_entries format=duration -of csv=p=0 "$OUTPUT" 2>/dev/null | cut -d. -f1)
+    if [[ -n "$DURATION" ]]; then
+        MINS=$((DURATION / 60))
+        SECS=$((DURATION % 60))
+        echo -e "${GREEN}✓ Created: $OUTPUT ($SIZE, ${MINS}m ${SECS}s)${NC}"
+    else
+        echo -e "${GREEN}✓ Created: $OUTPUT ($SIZE)${NC}"
+    fi
+else
+    echo -e "${RED}Error: Failed to create audio${NC}" >&2
+    exit 1
+fi
+
+# Play if requested
+if $PLAY_AFTER; then
+    echo -e "${YELLOW}Playing...${NC}"
+    if command -v afplay &> /dev/null; then
+        afplay "$OUTPUT"
+    elif command -v mpv &> /dev/null; then
+        mpv --no-video "$OUTPUT"
+    elif command -v ffplay &> /dev/null; then
+        ffplay -nodisp -autoexit "$OUTPUT" 2>/dev/null
+    else
+        echo -e "${RED}No audio player found (tried afplay, mpv, ffplay)${NC}" >&2
+    fi
+fi
