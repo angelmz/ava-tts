@@ -1,2 +1,5 @@
 # Generated audio
 *.mp3
+
+# Local scripts (course material)
+scripts/
