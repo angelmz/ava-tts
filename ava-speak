@@ -57,6 +57,10 @@ while [[ $# -gt 0 ]]; do
             echo "  echo 'Hello world' | ava-speak - -o hello.mp3"
             exit 0
             ;;
+        -)
+            INPUT="-"
+            shift
+            ;;
         -*)
             echo -e "${RED}Unknown option: $1${NC}" >&2
             exit 1
@@ -93,25 +97,32 @@ fi
 
 # Strip markdown if present (basic cleanup)
 # Remove headers, bold, italic, links, code blocks
-TEXT=$(echo "$TEXT" | sed 's/^#\+ //g' | sed 's/\*\*//g' | sed 's/\*//g' | sed 's/`//g' | sed 's/\[.*\](.*)/\1/g')
+# (sed -E keeps this portable between macOS/BSD sed and GNU sed)
+TEXT=$(printf '%s\n' "$TEXT" | sed -E -e 's/^#+[[:space:]]+//' -e 's/\*//g' -e 's/`//g' -e 's/\[([^]]*)\]\([^)]*\)/\1/g')
 
 # Check if edge-tts is available
-if ! command -v edge-tts &> /dev/null; then
-    # Try with python -m
-    if ! python3 -m edge_tts --help &> /dev/null 2>&1; then
-        echo -e "${RED}Error: edge-tts not found. Install with: pip install edge-tts${NC}" >&2
-        exit 1
-    fi
+if command -v edge-tts &> /dev/null; then
+    EDGE_TTS="edge-tts"
+elif [[ -x "$HOME/.local/bin/edge-tts" ]]; then
+    # pipx installs here; it may not be on PATH yet
+    EDGE_TTS="$HOME/.local/bin/edge-tts"
+elif python3 -m edge_tts --help &> /dev/null; then
     EDGE_TTS="python3 -m edge_tts"
 else
-    EDGE_TTS="edge-tts"
+    echo -e "${RED}Error: edge-tts not found. Install with: pipx install edge-tts (or pip install edge-tts)${NC}" >&2
+    exit 1
 fi
 
 # Generate audio
 echo -e "${YELLOW}Generating audio with ${VOICE}...${NC}"
-$EDGE_TTS --voice "$VOICE" --text "$TEXT" --write-media "$OUTPUT" 2>/dev/null
+rm -f "$OUTPUT"
+# --text= form so text starting with "-" isn't parsed as an option
+if ! $EDGE_TTS --voice "$VOICE" --text="$TEXT" --write-media "$OUTPUT"; then
+    echo -e "${RED}Error: edge-tts failed${NC}" >&2
+    exit 1
+fi
 
-if [[ -f "$OUTPUT" ]]; then
+if [[ -s "$OUTPUT" ]]; then
     SIZE=$(ls -lh "$OUTPUT" | awk '{print $5}')
     DURATION=$(ffprobe -v quiet -show_entries format=duration -of csv=p=0 "$OUTPUT" 2>/dev/null | cut -d. -f1)
     if [[ -n "$DURATION" ]]; then
